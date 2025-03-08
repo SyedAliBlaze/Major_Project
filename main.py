@@ -1,10 +1,11 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import cv2
 import os
 import threading
 import webbrowser
 from ultralytics import YOLO
+import logging
 from datetime import datetime
 
 # Create directory for screenshots
@@ -12,11 +13,18 @@ if not os.path.exists("screenshots"):
     os.makedirs("screenshots")
 
 DEFAULT_MODEL = "yolo11s.pt"
+def suppress_yolo_logs():
+    logging.getLogger("ultralytics").setLevel(logging.CRITICAL)
+
+def restore_logs():
+    logging.getLogger("ultralytics").setLevel(logging.WARNING)
 
 class YOLODetector:
     def __init__(self, model_path=DEFAULT_MODEL):
         self.model_path = model_path
+        suppress_yolo_logs()  # Suppress logs before loading YOLO
         self.model = self.load_model(model_path)
+        restore_logs()  # Restore logs after loading
 
     def load_model(self, model_path):
         try:
@@ -28,13 +36,26 @@ class YOLODetector:
     def capture_screenshot(self, frame):
         filename = f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         cv2.imwrite(filename, frame)
-        messagebox.showinfo("Screenshot Saved", f"Screenshot saved as {filename}")
+        # Removed the messagebox.showinfo call to avoid showing the pop-up window
+
+    def resize_frame(self, frame, width=1280, height=720):
+        h, w = frame.shape[:2]
+        scale = min(width / w, height / h)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        resized_frame = cv2.resize(frame, (new_w, new_h))
+        top = (height - new_h) // 2
+        bottom = height - new_h - top
+        left = (width - new_w) // 2
+        right = width - new_w - left
+        return cv2.copyMakeBorder(resized_frame, top, bottom, left, right, cv2.BORDER_CONSTANT)
 
     def detect_image(self, image_path):
         if not self.model:
             messagebox.showerror("Error", "No model loaded!")
             return
         img = cv2.imread(image_path)
+        img = self.resize_frame(img)
         results = self.model(img)
         for r in results:
             img = r.plot()
@@ -54,6 +75,7 @@ class YOLODetector:
             ret, frame = cap.read()
             if not ret:
                 break
+            frame = self.resize_frame(frame)
             results = self.model(frame)
             for r in results:
                 frame = r.plot()
@@ -66,11 +88,11 @@ class YOLODetector:
         cap.release()
         cv2.destroyAllWindows()
 
-    def detect_webcam(self):
+    def detect_webcam(self, camera_index=0):
         if not self.model:
             messagebox.showerror("Error", "No model loaded!")
             return
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
             messagebox.showerror("Error", "Failed to open webcam!")
             return
@@ -78,15 +100,19 @@ class YOLODetector:
             ret, frame = cap.read()
             if not ret:
                 break
-            results = self.model(frame)
+            frame = self.resize_frame(frame)
+            flipped_frame = cv2.flip(frame, 1)  # Flip the frame horizontally
+            results = self.model(flipped_frame)
             for r in results:
-                frame = r.plot()
-            cv2.imshow("Object Detection - Webcam", frame)
+                flipped_frame = r.plot()
+            cv2.imshow("Object Detection - Webcam", flipped_frame)  # Display the flipped frame directly
+            cv2.moveWindow("Object Detection - Webcam", 0, 0)  # Move window to top-left corner
+            cv2.setWindowProperty("Object Detection - Webcam", cv2.WND_PROP_TOPMOST, 1)  # Bring window to front
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
             elif key == ord('s'):
-                self.capture_screenshot(frame)
+                self.capture_screenshot(flipped_frame)  # Capture the flipped frame
         cap.release()
         cv2.destroyAllWindows()
 
@@ -98,6 +124,7 @@ class ObjectDetectionApp:
         self.detector = YOLODetector()
         self.model_name = tk.StringVar()
         self.model_name.set(f"Model: {DEFAULT_MODEL}")
+        self.camera_index = tk.StringVar(value="Camera 0")  # Default to system camera
         self.main_menu()
 
     def main_menu(self):
@@ -121,7 +148,24 @@ class ObjectDetectionApp:
         tk.Button(self.root, text="Detect Image", width=25, command=self.detect_image).pack(pady=5)
         tk.Button(self.root, text="Detect Video", width=25, command=self.detect_video).pack(pady=5)
         tk.Button(self.root, text="Detect Webcam", width=25, command=self.detect_webcam).pack(pady=5)
+
+        tk.Label(self.root, text="Select Camera:", font=("Arial", 12)).pack(pady=5)
+        self.camera_dropdown = ttk.Combobox(self.root, state="readonly", textvariable=self.camera_index)
+        self.camera_dropdown.pack(pady=5)
+        self.scan_cameras()
+
         tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+
+    def scan_cameras(self):
+        camera_options = []
+        for i in range(10):  # Scan for up to 10 cameras
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                camera_options.append(f"Camera {i}")
+                cap.release()
+        self.camera_dropdown['values'] = camera_options
+        if camera_options:
+            self.camera_dropdown.current(0)  # Set default selection to the first available camera
 
     def detect_image(self):
         file_path = filedialog.askopenfilename(title="Select an Image", filetypes=[("Image Files", "*.jpg;*.png;*.jpeg")])
@@ -134,7 +178,8 @@ class ObjectDetectionApp:
             threading.Thread(target=self.detector.detect_video, args=(file_path,)).start()
 
     def detect_webcam(self):
-        threading.Thread(target=self.detector.detect_webcam).start()
+        camera_index = int(self.camera_index.get().split()[-1])  # Extract the integer part
+        threading.Thread(target=self.detector.detect_webcam, args=(camera_index,)).start()
 
     def view_screenshots(self):
         os.startfile(os.path.abspath("screenshots"))
@@ -155,7 +200,8 @@ class ObjectDetectionApp:
             
             "3️⃣ **Live Object Detection (Webcam)**:\n"
             "   - Click 'Object Detection' → 'Detect Webcam'.\n"
-            "   - Object detection runs using your webcam.\n"
+            "   - Select the camera from the dropdown menu.\n"
+            "   - Object detection runs using your selected webcam.\n"
             "   - Press 'Q' to quit, 'S' to take a screenshot.\n\n"
             
             "4️⃣ **Load a Custom Model**:\n"
@@ -172,7 +218,6 @@ class ObjectDetectionApp:
         )
         
         messagebox.showinfo("Application Info", info_text)
-
 
     def settings_menu(self):
         self.clear_window()
