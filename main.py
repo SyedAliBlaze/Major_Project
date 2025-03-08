@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, Toplevel
 import cv2
 import os
 import threading
@@ -33,10 +33,8 @@ class YOLODetector:
             messagebox.showerror("Error", f"Failed to load model: {e}")
             return None
 
-    def capture_screenshot(self, frame):
-        filename = f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        cv2.imwrite(filename, frame)
-        # Removed the messagebox.showinfo call to avoid showing the pop-up window
+    def capture_screenshot(self, frame, output_path):
+        cv2.imwrite(output_path, frame)
 
     def resize_frame(self, frame, width=1280, height=720):
         h, w = frame.shape[:2]
@@ -57,13 +55,63 @@ class YOLODetector:
         img = cv2.imread(image_path)
         img = self.resize_frame(img)
         results = self.model(img)
-        for r in results:
-            img = r.plot()
-        cv2.imshow("Object Detection - Image", img)
-        cv2.waitKey(0)
+        show_boxes = True
+        img_with_boxes = img.copy()
+
+        def update_image():
+            nonlocal img_with_boxes
+            if show_boxes:
+                img_with_boxes = img.copy()
+                for r in results:
+                    img_with_boxes = r.plot()
+                cv2.imshow("Object Detection - Image", img_with_boxes)
+            else:
+                img_no_boxes = self.resize_frame(cv2.imread(image_path))
+                cv2.imshow("Object Detection - Image", img_no_boxes)
+
+        update_image()
+
+        while True:
+            key = cv2.waitKey(0) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('l'):
+                show_boxes = not show_boxes
+                update_image()
+            elif key == ord('s'):
+                self.capture_screenshot(img_with_boxes, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         cv2.destroyAllWindows()
 
-    def detect_video(self, video_path):
+    def detect_folder(self, folder_path, status_label, open_dir_button):
+        if not self.model:
+            messagebox.showerror("Error", "No model loaded!")
+            return
+
+        result_folder = os.path.join(folder_path, "result")
+        if not os.path.exists(result_folder):
+            os.makedirs(result_folder)
+
+        image_files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f)) and f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        total_files = len(image_files)
+        processed_files = 0
+
+        for filename in image_files:
+            file_path = os.path.join(folder_path, filename)
+            img = cv2.imread(file_path)
+            img = self.resize_frame(img)
+            results = self.model(img)
+            img_with_boxes = img.copy()
+            for r in results:
+                img_with_boxes = r.plot()
+            output_path = os.path.join(result_folder, filename)
+            self.capture_screenshot(img_with_boxes, output_path)
+            processed_files += 1
+            status_label.config(text=f"Processed {processed_files}/{total_files} images")
+
+        status_label.config(text="Processing complete!")
+        open_dir_button.config(state=tk.NORMAL)
+
+    def detect_video(self, video_path, control_vars):
         if not self.model:
             messagebox.showerror("Error", "No model loaded!")
             return
@@ -71,7 +119,21 @@ class YOLODetector:
         if not cap.isOpened():
             messagebox.showerror("Error", "Failed to open video file!")
             return
+        fps = cap.get(cv2.CAP_PROP_FPS)
         while cap.isOpened():
+            if control_vars['paused']:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('p'):
+                    control_vars['paused'] = not control_vars['paused']
+                elif key == ord('q'):
+                    break
+                elif key == ord('d'):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, cap.get(cv2.CAP_PROP_POS_FRAMES) + fps)
+                elif key == ord('a'):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, cap.get(cv2.CAP_PROP_POS_FRAMES) - fps))
+                elif key == ord('s'):
+                    self.capture_screenshot(frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                continue
             ret, frame = cap.read()
             if not ret:
                 break
@@ -83,12 +145,18 @@ class YOLODetector:
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
+            elif key == ord('p'):
+                control_vars['paused'] = not control_vars['paused']
+            elif key == ord('d'):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, cap.get(cv2.CAP_PROP_POS_FRAMES) + fps)
+            elif key == ord('a'):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, cap.get(cv2.CAP_PROP_POS_FRAMES) - fps))
             elif key == ord('s'):
-                self.capture_screenshot(frame)
+                self.capture_screenshot(frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         cap.release()
         cv2.destroyAllWindows()
 
-    def detect_webcam(self, camera_index=0):
+    def detect_webcam(self, camera_index=0, control_vars=None):
         if not self.model:
             messagebox.showerror("Error", "No model loaded!")
             return
@@ -97,6 +165,15 @@ class YOLODetector:
             messagebox.showerror("Error", "Failed to open webcam!")
             return
         while True:
+            if control_vars and control_vars['paused']:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('p'):
+                    control_vars['paused'] = not control_vars['paused']
+                elif key == ord('q'):
+                    break
+                elif key == ord('s'):
+                    self.capture_screenshot(frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                continue
             ret, frame = cap.read()
             if not ret:
                 break
@@ -106,13 +183,14 @@ class YOLODetector:
             for r in results:
                 flipped_frame = r.plot()
             cv2.imshow("Object Detection - Webcam", flipped_frame)  # Display the flipped frame directly
-            cv2.moveWindow("Object Detection - Webcam", 0, 0)  # Move window to top-left corner
-            cv2.setWindowProperty("Object Detection - Webcam", cv2.WND_PROP_TOPMOST, 1)  # Bring window to front
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
+            elif key == ord('p'):
+                if control_vars:
+                    control_vars['paused'] = not control_vars['paused']
             elif key == ord('s'):
-                self.capture_screenshot(flipped_frame)  # Capture the flipped frame
+                self.capture_screenshot(flipped_frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")  # Capture the flipped frame
         cap.release()
         cv2.destroyAllWindows()
 
@@ -125,6 +203,7 @@ class ObjectDetectionApp:
         self.model_name = tk.StringVar()
         self.model_name.set(f"Model: {DEFAULT_MODEL}")
         self.camera_index = tk.StringVar(value="Camera 0")  # Default to system camera
+        self.control_vars = {'paused': False}
         self.main_menu()
 
     def main_menu(self):
@@ -148,6 +227,7 @@ class ObjectDetectionApp:
         tk.Button(self.root, text="Detect Image", width=25, command=self.detect_image).pack(pady=5)
         tk.Button(self.root, text="Detect Video", width=25, command=self.detect_video).pack(pady=5)
         tk.Button(self.root, text="Detect Webcam", width=25, command=self.detect_webcam).pack(pady=5)
+        tk.Button(self.root, text="Detect Folder (Image Only)", width=25, command=self.detect_folder).pack(pady=5)
 
         tk.Label(self.root, text="Select Camera:", font=("Arial", 12)).pack(pady=5)
         self.camera_dropdown = ttk.Combobox(self.root, state="readonly", textvariable=self.camera_index)
@@ -175,11 +255,27 @@ class ObjectDetectionApp:
     def detect_video(self):
         file_path = filedialog.askopenfilename(title="Select a Video", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
         if file_path:
-            threading.Thread(target=self.detector.detect_video, args=(file_path,)).start()
+            threading.Thread(target=self.detector.detect_video, args=(file_path, self.control_vars)).start()
 
     def detect_webcam(self):
         camera_index = int(self.camera_index.get().split()[-1])  # Extract the integer part
-        threading.Thread(target=self.detector.detect_webcam, args=(camera_index,)).start()
+        threading.Thread(target=self.detector.detect_webcam, args=(camera_index, self.control_vars)).start()
+
+    def detect_folder(self):
+        folder_path = filedialog.askdirectory(title="Select a Folder")
+        if folder_path:
+            self.show_loading_popup(folder_path)
+
+    def show_loading_popup(self, folder_path):
+        loading_popup = Toplevel(self.root)
+        loading_popup.title("Processing")
+        loading_popup.geometry("300x150")
+        tk.Label(loading_popup, text="Processing images...").pack(pady=10)
+        status_label = tk.Label(loading_popup, text="Processed 0/0 images")
+        status_label.pack(pady=10)
+        open_dir_button = tk.Button(loading_popup, text="Open Result Folder", state=tk.DISABLED, command=lambda: os.startfile(os.path.join(folder_path, "result")))
+        open_dir_button.pack(pady=10)
+        threading.Thread(target=self.detector.detect_folder, args=(folder_path, status_label, open_dir_button)).start()
 
     def view_screenshots(self):
         os.startfile(os.path.abspath("screenshots"))
@@ -190,26 +286,32 @@ class ObjectDetectionApp:
             "1️⃣ **Detect Objects in Images**:\n"
             "   - Click 'Object Detection' → 'Detect Image'.\n"
             "   - Select an image file (.jpg, .png, .jpeg).\n"
-            "   - The detected objects will be displayed.\n\n"
+            "   - The detected objects will be displayed.\n"
+            "   - Press 'Q' to quit, 'L' to hide/show bounding boxes, 'S' to take a screenshot.\n\n"
             
             "2️⃣ **Detect Objects in Videos**:\n"
             "   - Click 'Object Detection' → 'Detect Video'.\n"
             "   - Select a video file (.mp4, .avi, .mov).\n"
             "   - Object detection runs in real time.\n"
-            "   - Press 'Q' to quit, 'S' to take a screenshot.\n\n"
+            "   - Press 'Q' to quit, 'P' to pause/play, 'S' to take a screenshot.\n\n"
             
             "3️⃣ **Live Object Detection (Webcam)**:\n"
             "   - Click 'Object Detection' → 'Detect Webcam'.\n"
             "   - Select the camera from the dropdown menu.\n"
             "   - Object detection runs using your selected webcam.\n"
-            "   - Press 'Q' to quit, 'S' to take a screenshot.\n\n"
+            "   - Press 'Q' to quit, 'P' to pause/play, 'S' to take a screenshot.\n\n"
             
-            "4️⃣ **Load a Custom Model**:\n"
+            "4️⃣ **Detect Objects in Folder (Image Only)**:\n"
+            "   - Click 'Object Detection' → 'Detect Folder (Image Only)'.\n"
+            "   - Select a folder containing image files (.jpg, .png, .jpeg).\n"
+            "   - The detected objects will be saved in a 'result' folder within the selected folder.\n\n"
+            
+            "5️⃣ **Load a Custom Model**:\n"
             "   - Go to 'Settings' → 'Load Model'.\n"
             "   - Select a trained YOLO model (.pt file).\n"
             "   - The new model will be loaded for detection.\n\n"
             
-            "5️⃣ **View Screenshots**:\n"
+            "6️⃣ **View Screenshots**:\n"
             "   - Click 'View Screenshots' to open the saved images.\n"
             "   - Screenshots are saved in the 'screenshots' folder.\n\n"
             
