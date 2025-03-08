@@ -1,231 +1,188 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
 import cv2
 import os
-import numpy as np
-import tkinter as tk
-from tkinter import filedialog, Toplevel
-from PIL import Image, ImageTk
+import threading
+import webbrowser
 from ultralytics import YOLO
-import time  # For unique filename timestamps
+from datetime import datetime
 
-# Initialize Tkinter
-root = tk.Tk()
-root.title("YOLO Object Detection")
-root.geometry("400x300")
+# Create directory for screenshots
+if not os.path.exists("screenshots"):
+    os.makedirs("screenshots")
 
-# Load YOLO Model
-model_path = "yolo11s.pt"
-model = YOLO(model_path, task='detect')
-labels = model.names
+class YOLODetector:
+    def __init__(self, model_path):
+        self.model = self.load_model(model_path)
 
-# Global Variables
-cap = None
-running = False
-paused = False  # Pause flag
-detection_window = None
-panel = None
-img_ref = None  # Prevent garbage collection
-current_frame = None  # Stores the last displayed frame
+    def load_model(self, model_path):
+        try:
+            return YOLO(model_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load model: {e}")
+            return None
 
+    def capture_screenshot(self, frame):
+        filename = f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        cv2.imwrite(filename, frame)
+        messagebox.showinfo("Screenshot Saved", f"Screenshot saved as {filename}")
 
-def open_detection_window(width, height):
-    """Opens a separate detection window."""
-    global detection_window, panel, running
+    def resize_frame(self, frame):
+        """ Resize frame while maintaining aspect ratio and halving the horizontal resolution """
+        h, w, _ = frame.shape
+        new_w = w // 2  # Halve horizontal resolution
+        aspect_ratio = h / w
+        new_h = int(new_w * aspect_ratio)  # Maintain aspect ratio
+        return cv2.resize(frame, (new_w, new_h))
 
-    root.withdraw()  # Hide main menu
-    running = True
+    def detect_image(self, image_path):
+        if not self.model:
+            messagebox.showerror("Error", "No model loaded!")
+            return
+        img = cv2.imread(image_path)
+        results = self.model(img)
+        for r in results:
+            img = r.plot()
+        img_resized = self.resize_frame(img)  # Apply resizing only in Image Mode
+        cv2.imshow("Object Detection - Image", img_resized)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
-    detection_window = Toplevel(root)
-    detection_window.title("Detection Window")
-    detection_window.geometry(f"{width}x{height}")
-
-    panel = tk.Label(detection_window)
-    panel.pack()
-
-    detection_window.protocol("WM_DELETE_WINDOW", close_detection_window)
-    detection_window.bind("<KeyPress>", key_press_event)  # Capture key events
-    detection_window.focus_set()  # Ensure key events are captured
-
-
-def close_detection_window():
-    """Closes the detection window and stops processing."""
-    global running, cap, detection_window
-    running = False
-    if cap:
+    def detect_video(self, video_path):
+        if not self.model:
+            messagebox.showerror("Error", "No model loaded!")
+            return
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            messagebox.showerror("Error", "Failed to open video file!")
+            return
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            results = self.model(frame)
+            for r in results:
+                frame = r.plot()
+            frame_resized = self.resize_frame(frame)  # Apply resizing for video mode
+            cv2.imshow("Object Detection - Video", frame_resized)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('s'):
+                self.capture_screenshot(frame_resized)
         cap.release()
+        cv2.destroyAllWindows()
 
-    if detection_window:
-        detection_window.destroy()
-        detection_window = None
+    def detect_webcam(self):
+        if not self.model:
+            messagebox.showerror("Error", "No model loaded!")
+            return
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            messagebox.showerror("Error", "Failed to open webcam!")
+            return
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            results = self.model(frame)
+            for r in results:
+                frame = r.plot()
+            cv2.imshow("Object Detection - Webcam", frame)  # No resizing in Webcam Mode
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('s'):
+                self.capture_screenshot(frame)  # Capture full-resolution frame
+        cap.release()
+        cv2.destroyAllWindows()
 
-    root.deiconify()  # Show main menu again
+class ObjectDetectionApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Object Detection App")
+        self.root.geometry("500x400")
+        self.detector = None
+        self.main_menu()
 
+    def main_menu(self):
+        self.clear_window()
+        tk.Label(self.root, text="Main Menu", font=("Arial", 16, "bold")).pack(pady=20)
 
-def key_press_event(event):
-    """Handles key events for pausing and taking screenshots."""
-    global paused, current_frame
+        tk.Button(self.root, text="Object Detection", width=25, height=2, command=self.object_detection_menu).pack(pady=10)
+        tk.Button(self.root, text="Settings", width=25, height=2, command=self.settings_menu).pack(pady=10)
+        tk.Button(self.root, text="View Screenshots", width=25, height=2, command=self.view_screenshots).pack(pady=10)
+        tk.Button(self.root, text="Quit", width=25, height=2, bg="red", fg="white", command=self.root.quit).pack(pady=20)
 
-    if event.char == 'p':
-        paused = not paused  # Toggle pause state
-    elif event.char == 's' and current_frame is not None:
-        save_screenshot()
+        # Info button at bottom left
+        info_button = tk.Button(self.root, text="ℹ Info", font=("Arial", 10, "bold"), bg="gray", fg="white", command=self.show_info)
+        info_button.place(x=10, y=360)
 
+    def object_detection_menu(self):
+        self.clear_window()
+        tk.Label(self.root, text="Object Detection", font=("Arial", 14, "bold")).pack(pady=10)
 
-def save_screenshot():
-    """Saves the current frame as an image file in the 'screenshots' folder."""
-    global current_frame
-    if current_frame is None:
-        return
+        tk.Button(self.root, text="Detect Image", width=25, command=self.detect_image).pack(pady=5)
+        tk.Button(self.root, text="Detect Video", width=25, command=self.detect_video).pack(pady=5)
+        tk.Button(self.root, text="Detect Webcam", width=25, command=self.detect_webcam).pack(pady=5)
+        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
 
-    # Create the screenshots folder if it doesn't exist
-    screenshot_folder = "screenshots"
-    if not os.path.exists(screenshot_folder):
-        os.makedirs(screenshot_folder)
+    def settings_menu(self):
+        self.clear_window()
+        tk.Label(self.root, text="Settings", font=("Arial", 14, "bold")).pack(pady=10)
 
-    # Generate a unique filename with timestamp
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    filename = os.path.join(screenshot_folder, f"screenshot_{timestamp}.png")
+        tk.Button(self.root, text="Load Model", width=25, command=self.load_model).pack(pady=5)
+        tk.Button(self.root, text="Gather Dataset", width=25, command=lambda: webbrowser.open("https://universe.roboflow.com/")).pack(pady=5)
+        tk.Button(self.root, text="Train Model", width=25, command=lambda: webbrowser.open("https://colab.research.google.com/github/EdjeElectronics/Train-and-Deploy-YOLO-Models/blob/main/Train_YOLO_Models.ipynb")).pack(pady=5)
+        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
 
-    # Save the image
-    cv2.imwrite(filename, cv2.cvtColor(current_frame, cv2.COLOR_RGB2BGR))
-    print(f"Screenshot saved as {filename}")
+    def load_model(self):
+        file_path = filedialog.askopenfilename(title="Select YOLO Model", filetypes=[("Model Files", "*.pt")])
+        if file_path:
+            self.detector = YOLODetector(file_path)
+            messagebox.showinfo("Success", "Model loaded successfully!")
 
+    def detect_image(self):
+        if not self.detector:
+            messagebox.showerror("Error", "Load a model first!")
+            return
+        file_path = filedialog.askopenfilename(title="Select Image", filetypes=[("Image Files", "*.jpg;*.png;*.jpeg")])
+        if file_path:
+            threading.Thread(target=self.detector.detect_image, args=(file_path,), daemon=True).start()
 
+    def detect_video(self):
+        if not self.detector:
+            messagebox.showerror("Error", "Load a model first!")
+            return
+        file_path = filedialog.askopenfilename(title="Select Video", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
+        if file_path:
+            threading.Thread(target=self.detector.detect_video, args=(file_path,), daemon=True).start()
 
-def select_image():
-    """Opens a file dialog for image selection."""
-    file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp")])
-    if file_path:
-        image = cv2.imread(file_path)
-        height, width, _ = image.shape
+    def detect_webcam(self):
+        if not self.detector:
+            messagebox.showerror("Error", "Load a model first!")
+            return
+        threading.Thread(target=self.detector.detect_webcam, daemon=True).start()
 
-        open_detection_window(600, int((600 / width) * height))  # Dynamic height
-        process_image(image)
+    def view_screenshots(self):
+        os.system("explorer screenshots")
 
+    def show_info(self):
+        info_text = (
+            "📌 How to Use the App:\n"
+            "1️⃣ Load a YOLO model in Settings.\n"
+            "2️⃣ Use 'Detect Image', 'Detect Video', or 'Detect Webcam'.\n"
+            "3️⃣ Press 's' during video/webcam to take a screenshot.\n"
+            "4️⃣ View screenshots in 'View Screenshots'.\n"
+            "5️⃣ Press 'q' to quit detection mode."
+        )
+        messagebox.showinfo("Instructions", info_text)
 
-def process_image(frame):
-    """Processes an image by applying YOLO object detection."""
-    frame = detect_objects(frame)
+    def clear_window(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
 
-    # Convert BGR to RGB to fix discoloration
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    original_height, original_width = frame.shape[:2]
-    new_width = 600
-    new_height = int((new_width / original_width) * original_height)
-
-    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-    display_frame(frame)
-
-
-
-def detect_objects(frame):
-    """Runs YOLO object detection on the given frame."""
-    results = model(frame, verbose=False)
-    detections = results[0].boxes
-
-    for i in range(len(detections)):
-        xyxy = detections[i].xyxy.cpu().numpy().squeeze().astype(int)
-        xmin, ymin, xmax, ymax = xyxy
-        classidx = int(detections[i].cls.item())
-        classname = labels[classidx]
-        conf = detections[i].conf.item()
-
-        if conf > 0.5:
-            color = (0, 255, 0)
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
-            label = f'{classname}: {int(conf * 100)}%'
-            cv2.putText(frame, label, (xmin, ymin - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-    return frame
-
-
-def select_video():
-    """Opens a file dialog for video selection."""
-    global cap
-    file_path = filedialog.askopenfilename(filetypes=[("Video Files", "*.avi;*.mp4;*.mkv")])
-    if file_path:
-        cap = cv2.VideoCapture(file_path)
-        original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        # Reduce resolution to half while maintaining aspect ratio
-        new_width = original_width // 2
-        new_height = original_height // 2
-
-        open_detection_window(new_width, new_height)
-        process_video(new_width, new_height)
-
-
-def use_webcam():
-    """Opens the webcam for real-time object detection."""
-    global cap
-    cap = cv2.VideoCapture(0)  # Open default webcam
-    if not cap.isOpened():
-        print("Error: Could not open webcam.")
-        return
-
-    # Set webcam resolution to 1280x720
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-    open_detection_window(1280, 720)
-    process_video(1280, 720)
-
-
-def process_video(new_width, new_height):
-    """Processes video or webcam frames, handling pause and detection."""
-    global cap, running, paused, panel, img_ref, current_frame
-
-    if not running or not cap.isOpened():
-        close_detection_window()
-        return
-
-    if paused:
-        panel.after(10, lambda: process_video(new_width, new_height))  # Keep checking while paused
-        return
-
-    ret, frame = cap.read()
-    if not ret:
-        close_detection_window()
-        return
-
-    # Flip only if using webcam (assuming resolution 1280x720)
-    if cap.get(cv2.CAP_PROP_FRAME_WIDTH) == 1280 and cap.get(cv2.CAP_PROP_FRAME_HEIGHT) == 720:
-        frame = cv2.flip(frame, 1)  # Flip webcam feed
-
-    # Resize the video frame to half resolution while keeping aspect ratio
-    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-
-    frame = detect_objects(frame)  # Apply YOLO detection
-
-    current_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Store current frame
-    display_frame(current_frame)
-
-    if running:
-        panel.after(10, lambda: process_video(new_width, new_height))  # Refresh every 10ms
-
-
-def display_frame(frame):
-    """Displays the processed frame on the Tkinter panel."""
-    global img_ref
-
-    if not detection_window or not detection_window.winfo_exists():
-        return
-
-    img = Image.fromarray(frame)
-    img_ref = ImageTk.PhotoImage(image=img)
-    panel.config(image=img_ref)
-    panel.update_idletasks()
-
-
-# Tkinter UI Buttons
-btn_image = tk.Button(root, text="Select Image", command=select_image)
-btn_image.pack(pady=10)
-
-btn_video = tk.Button(root, text="Select Video", command=select_video)
-btn_video.pack(pady=10)
-
-btn_webcam = tk.Button(root, text="Use Webcam", command=use_webcam)
-btn_webcam.pack(pady=10)
-
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ObjectDetectionApp(root)
+    root.mainloop()
