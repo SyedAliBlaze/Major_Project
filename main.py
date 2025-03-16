@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, Toplevel
+from tkinter import filedialog, messagebox, Toplevel
 import cv2
 import os
 import threading
@@ -7,34 +7,77 @@ import webbrowser
 from ultralytics import YOLO
 import logging
 from datetime import datetime
+import torch
+from basicsr.archs.rrdbnet_arch import RRDBNet  # Real-ESRGAN dependency
+from realesrgan import RealESRGANer  # Real-ESRGAN dependency
+import time  # For timer functionality
+import sys  # For proper exit
 
-# Create directory for screenshots
-if not os.path.exists("screenshots"):
-    os.makedirs("screenshots")
+# Create directories
+for folder in ["TEMP", "TEMP_RES", "RES", "MODEL", "folder result"]:
+    if not os.path.exists(folder):
+        os.makedirs(folder)
 
-DEFAULT_MODEL = "yolo11s.pt"
+DEFAULT_MODEL = os.path.join("MODEL", "yolo11s.pt")
+DEFAULT_SR_MODEL = os.path.join("MODEL", "RealESRGAN_x4plus.pth")  # Super-resolution model
+
 def suppress_yolo_logs():
     logging.getLogger("ultralytics").setLevel(logging.CRITICAL)
 
 def restore_logs():
     logging.getLogger("ultralytics").setLevel(logging.WARNING)
 
+def classify_resolution(width, height):
+    total_pixels = width * height
+    low_threshold = 500_000  # 0.5 million pixels
+    high_threshold = 2_000_000  # 2 megapixels
+    if total_pixels < low_threshold:
+        return "Low Resolution"
+    elif total_pixels >= high_threshold:
+        return "High Resolution"
+    else:
+        return "Medium Resolution"
+
 class YOLODetector:
-    def __init__(self, model_path=DEFAULT_MODEL):
+    def __init__(self, model_path=DEFAULT_MODEL, sr_model_path=DEFAULT_SR_MODEL, root=None):
+        self.root = root  # For thread-safe GUI updates
         self.model_path = model_path
-        suppress_yolo_logs()  # Suppress logs before loading YOLO
+        self.sr_model_path = sr_model_path
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"Using device: {self.device}")
+        suppress_yolo_logs()
         self.model = self.load_model(model_path)
-        restore_logs()  # Restore logs after loading
+        self.sr_model = self.load_sr_model(sr_model_path)
+        restore_logs()
+        self.split_frames = 0
+        self.processed_frames = 0
+        self.stitched_frames = 0
+        self.total_frames = 0
+        self.cancelled = False
 
     def load_model(self, model_path):
         try:
-            return YOLO(model_path)
+            if not os.path.isabs(model_path):
+                model_path = os.path.join(os.path.dirname(__file__), model_path)
+            model = YOLO(model_path)
+            model.to(self.device)
+            return model
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load model: {e}")
+            messagebox.showerror("Error", f"Failed to load YOLO model: {e}")
             return None
 
-    def capture_screenshot(self, frame, output_path):
-        cv2.imwrite(output_path, frame)
+    def load_sr_model(self, sr_model_path):
+        try:
+            if not os.path.isabs(sr_model_path):
+                sr_model_path = os.path.join(os.path.dirname(__file__), sr_model_path)
+            model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+            upsampler = RealESRGANer(
+                scale=4, model_path=sr_model_path, model=model, tile=0, tile_pad=10, pre_pad=0, device=self.device
+            )
+            return upsampler
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load SR model: {e}")
+            return None
 
     def resize_frame(self, frame, width=1280, height=720):
         h, w = frame.shape[:2]
@@ -48,218 +91,194 @@ class YOLODetector:
         right = width - new_w - left
         return cv2.copyMakeBorder(resized_frame, top, bottom, left, right, cv2.BORDER_CONSTANT)
 
-    def detect_image(self, image_path):
-        if not self.model:
-            messagebox.showerror("Error", "No model loaded!")
-            return
-        img = cv2.imread(image_path)
-        img = self.resize_frame(img)
-        results = self.model(img)
-        show_boxes = True
-        img_with_boxes = img.copy()
+    def apply_super_resolution(self, img):
+        if not self.sr_model:
+            return img
+        try:
+            sr_img, _ = self.sr_model.enhance(img, outscale=4)
+            return sr_img
+        except Exception as e:
+            messagebox.showerror("Error", f"Super-resolution failed: {e}")
+            return img
 
-        def update_image():
-            nonlocal img_with_boxes
-            if show_boxes:
-                img_with_boxes = img.copy()
-                for r in results:
-                    img_with_boxes = r.plot()
-                cv2.imshow("Object Detection - Image", img_with_boxes)
-            else:
-                img_no_boxes = self.resize_frame(cv2.imread(image_path))
-                cv2.imshow("Object Detection - Image", img_no_boxes)
+    def capture_screenshot(self, frame, output_path):
+        cv2.imwrite(output_path, frame)
 
-        update_image()
-
-        while True:
-            key = cv2.waitKey(0) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('l'):
-                show_boxes = not show_boxes
-                update_image()
-            elif key == ord('s'):
-                self.capture_screenshot(img_with_boxes, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-        cv2.destroyAllWindows()
-
-    def detect_folder(self, folder_path, status_label, open_dir_button):
-        if not self.model:
-            messagebox.showerror("Error", "No model loaded!")
+    def detect_folder(self, folder_path, status_label, timer_label, resolution_label):
+        if not self.model or not self.sr_model:
+            messagebox.showerror("Error", "Model(s) not loaded!")
             return
 
-        result_folder = os.path.join(folder_path, "result")
-        if not os.path.exists(result_folder):
-            os.makedirs(result_folder)
+        date_time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        result_subfolder = os.path.join("folder result", date_time_str)
+        os.makedirs(result_subfolder, exist_ok=True)
 
-        image_files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f)) and f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         total_files = len(image_files)
         processed_files = 0
+        low_res_count = 0
+        high_med_res_count = 0
 
+        if total_files == 0:
+            messagebox.showwarning("Warning", "No valid images found!")
+            self.root.after(0, lambda: status_label.config(text="No valid images found!"))
+            return
+
+        start_time = time.time()
         for filename in image_files:
             file_path = os.path.join(folder_path, filename)
-            img = cv2.imread(file_path)
-            img = self.resize_frame(img)
-            results = self.model(img)
-            img_with_boxes = img.copy()
-            for r in results:
-                img_with_boxes = r.plot()
-            output_path = os.path.join(result_folder, filename)
-            self.capture_screenshot(img_with_boxes, output_path)
-            processed_files += 1
-            status_label.config(text=f"Processed {processed_files}/{total_files} images")
+            try:
+                img = cv2.imread(file_path)
+                if img is None:
+                    continue
+                height, width = img.shape[:2]
+                resolution_class = classify_resolution(width, height)
+                if resolution_class == "Low Resolution":
+                    low_res_count += 1
+                    img_processed = self.apply_super_resolution(img)
+                else:
+                    high_med_res_count += 1
+                    img_processed = img
+                img_resized = self.resize_frame(img_processed)
+                results = self.model(img_resized)
+                img_with_boxes = img_resized.copy()
+                for r in results:
+                    img_with_boxes = r.plot()
+                output_path = os.path.join(result_subfolder, filename)
+                self.capture_screenshot(img_with_boxes, output_path)
+                processed_files += 1
+                elapsed_time = int(time.time() - start_time)
+                self.root.after(0, lambda: status_label.config(text=f"Processed {processed_files}/{total_files} images"))
+                self.root.after(0, lambda: timer_label.config(text=f"Elapsed Time: {elapsed_time}s"))
+            except Exception:
+                continue
 
-        status_label.config(text="Processing complete!")
-        open_dir_button.config(state=tk.NORMAL)
+        elapsed_time = int(time.time() - start_time)
+        self.root.after(0, lambda: status_label.config(text="Processing complete!"))
+        self.root.after(0, lambda: timer_label.config(text=f"Elapsed Time: {elapsed_time}s"))
+        self.root.after(0, lambda: resolution_label.config(text=f"Low Res: {low_res_count}, Med/High Res: {high_med_res_count}"))
+        self.root.latest_result_subfolder = result_subfolder
 
-    def detect_video(self, video_path, control_vars):
-        if not self.model:
-            messagebox.showerror("Error", "No model loaded!")
-            return
+    def split_video_to_frames(self, video_path):
+        self.split_frames = 0
+        self.total_frames = 0
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             messagebox.showerror("Error", "Failed to open video file!")
-            return
+            return None, None
         fps = cap.get(cv2.CAP_PROP_FPS)
-        while cap.isOpened():
-            if control_vars['paused']:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('p'):
-                    control_vars['paused'] = not control_vars['paused']
-                elif key == ord('q'):
-                    break
-                elif key == ord('d'):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, cap.get(cv2.CAP_PROP_POS_FRAMES) + fps)
-                elif key == ord('a'):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, cap.get(cv2.CAP_PROP_POS_FRAMES) - fps))
-                elif key == ord('s'):
-                    self.capture_screenshot(frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-                continue
+        self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        while cap.isOpened() and not self.cancelled:
             ret, frame = cap.read()
             if not ret:
                 break
-            frame = self.resize_frame(frame)
-            results = self.model(frame)
-            for r in results:
-                frame = r.plot()
-            cv2.imshow("Object Detection - Video", frame)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('p'):
-                control_vars['paused'] = not control_vars['paused']
-            elif key == ord('d'):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, cap.get(cv2.CAP_PROP_POS_FRAMES) + fps)
-            elif key == ord('a'):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, cap.get(cv2.CAP_PROP_POS_FRAMES) - fps))
-            elif key == ord('s'):
-                self.capture_screenshot(frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+            frame_path = os.path.join("TEMP", f"frame_{self.split_frames:06d}.png")
+            cv2.imwrite(frame_path, frame)
+            self.split_frames += 1
         cap.release()
-        cv2.destroyAllWindows()
+        if self.cancelled:
+            return None, None
+        return fps, self.split_frames
 
-    def detect_webcam(self, camera_index=0, control_vars=None):
+    def process_frames_with_yolo(self):
         if not self.model:
             messagebox.showerror("Error", "No model loaded!")
             return
-        cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            messagebox.showerror("Error", "Failed to open webcam!")
-            return
-        while True:
-            if control_vars and control_vars['paused']:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('p'):
-                    control_vars['paused'] = not control_vars['paused']
-                elif key == ord('q'):
-                    break
-                elif key == ord('s'):
-                    self.capture_screenshot(frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-                continue
-            ret, frame = cap.read()
-            if not ret:
+        self.processed_frames = 0
+        for filename in os.listdir("TEMP"):
+            if self.cancelled:
                 break
-            frame = self.resize_frame(frame)
-            flipped_frame = cv2.flip(frame, 1)  # Flip the frame horizontally
-            results = self.model(flipped_frame)
-            for r in results:
-                flipped_frame = r.plot()
-            cv2.imshow("Object Detection - Webcam", flipped_frame)  # Display the flipped frame directly
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('p'):
-                if control_vars:
-                    control_vars['paused'] = not control_vars['paused']
-            elif key == ord('s'):
-                self.capture_screenshot(flipped_frame, f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")  # Capture the flipped frame
-        cap.release()
-        cv2.destroyAllWindows()
+            if filename.endswith(".png"):
+                frame_path = os.path.join("TEMP", filename)
+                frame = cv2.imread(frame_path)
+                if frame is None:
+                    continue
+                height, width = frame.shape[:2]
+                resolution_class = classify_resolution(width, height)
+                if resolution_class == "Low Resolution":
+                    frame = self.apply_super_resolution(frame)
+                frame_resized = self.resize_frame(frame)
+                results = self.model(frame_resized)
+                for r in results:
+                    frame_resized = r.plot()
+                output_path = os.path.join("TEMP_RES", filename)
+                cv2.imwrite(output_path, frame_resized)
+                self.processed_frames += 1
 
-class ObjectDetectionApp:
+    def stitch_frames_to_video(self, fps, output_video_path):
+        self.stitched_frames = 0
+        images = [img for img in os.listdir("TEMP_RES") if img.endswith(".png")]
+        images.sort()
+        if not images:
+            messagebox.showerror("Error", "No processed frames found!")
+            return
+        frame = cv2.imread(os.path.join("TEMP_RES", images[0]))
+        height, width = frame.shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+        for image in images:
+            if self.cancelled:
+                break
+            frame = cv2.imread(os.path.join("TEMP_RES", image))
+            out.write(frame)
+            self.stitched_frames += 1
+        out.release()
+
+    def cleanup_temp_files(self):
+        for folder in ["TEMP", "TEMP_RES"]:
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception:
+                    pass
+
+    def process_video(self, video_path, app):
+        self.cancelled = False  # Reset cancellation flag
+        fps, frame_count = self.split_video_to_frames(video_path)
+        if fps is None or frame_count == 0:
+            if not self.cancelled:
+                messagebox.showerror("Error", "Video splitting failed!")
+            app.progress_window.destroy()
+            return
+        self.process_frames_with_yolo()
+        if not self.cancelled:
+            output_video_path = os.path.join("RES", f"result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+            self.stitch_frames_to_video(fps, output_video_path)
+        self.cleanup_temp_files()
+        app.progress_window.destroy()
+        if self.cancelled:
+            messagebox.showinfo("Cancelled", "Video processing was cancelled.")
+
+    def cancel_processing(self):
+        self.cancelled = True
+
+class CombinedDetectionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Object Detection App")
+        self.root.title("Object Detection with SR (Folder & Video)")
         self.root.geometry("500x400")
-        self.detector = YOLODetector()
+        self.detector = YOLODetector(root=self.root)
         self.model_name = tk.StringVar()
-        self.model_name.set(f"Model: {DEFAULT_MODEL}")
-        self.camera_index = tk.StringVar(value="Camera 0")  # Default to system camera
-        self.control_vars = {'paused': False}
+        self.model_name.set(f"Model: {os.path.basename(DEFAULT_MODEL)}, SR: {os.path.basename(DEFAULT_SR_MODEL)}")
+        self.progress_window = None
+        self.split_label = None
+        self.processed_label = None
+        self.stitched_label = None
+        self.active_threads = []  # Track active threads
         self.main_menu()
 
     def main_menu(self):
         self.clear_window()
-        tk.Label(self.root, text="Main Menu", font=("Arial", 16, "bold")).pack(pady=20)
-
-        tk.Button(self.root, text="Object Detection", width=25, height=2, command=self.object_detection_menu).pack(pady=10)
+        tk.Label(self.root, text="Object Detection with SR", font=("Arial", 16, "bold")).pack(pady=20)
+        tk.Button(self.root, text="Detect Folder", width=25, height=2, command=self.detect_folder).pack(pady=10)
+        tk.Button(self.root, text="Process Video", width=25, height=2, command=self.process_video).pack(pady=10)
         tk.Button(self.root, text="Settings", width=25, height=2, command=self.settings_menu).pack(pady=10)
-        tk.Button(self.root, text="View Screenshots", width=25, height=2, command=self.view_screenshots).pack(pady=10)
-        tk.Button(self.root, text="Quit", width=25, height=2, bg="red", fg="white", command=self.root.quit).pack(pady=20)
-        
+        tk.Button(self.root, text="View Results", width=25, height=2, command=self.view_results_menu).pack(pady=10)
+        tk.Button(self.root, text="Quit", width=25, height=2, bg="red", fg="white", command=self.quit_app).pack(pady=20)
         info_button = tk.Button(self.root, text="ℹ Info", font=("Arial", 10, "bold"), bg="gray", fg="white", command=self.show_info)
         info_button.place(x=10, y=360)
-
-    def object_detection_menu(self):
-        self.clear_window()
-        self.root.update_idletasks()  # Force an update to ensure widgets are displayed properly
-
-        tk.Label(self.root, text="Object Detection", font=("Arial", 14, "bold")).pack(pady=10)
-
-        tk.Button(self.root, text="Detect Image", width=25, command=self.detect_image).pack(pady=5)
-        tk.Button(self.root, text="Detect Video", width=25, command=self.detect_video).pack(pady=5)
-        tk.Button(self.root, text="Detect Webcam", width=25, command=self.detect_webcam).pack(pady=5)
-        tk.Button(self.root, text="Detect Folder (Image Only)", width=25, command=self.detect_folder).pack(pady=5)
-
-        tk.Label(self.root, text="Select Camera:", font=("Arial", 12)).pack(pady=5)
-        self.camera_dropdown = ttk.Combobox(self.root, state="readonly", textvariable=self.camera_index)
-        self.camera_dropdown.pack(pady=5)
-        self.scan_cameras()
-
-        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
-
-    def scan_cameras(self):
-        camera_options = []
-        for i in range(10):  # Scan for up to 10 cameras
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                camera_options.append(f"Camera {i}")
-                cap.release()
-        self.camera_dropdown['values'] = camera_options
-        if camera_options:
-            self.camera_dropdown.current(0)  # Set default selection to the first available camera
-
-    def detect_image(self):
-        file_path = filedialog.askopenfilename(title="Select an Image", filetypes=[("Image Files", "*.jpg;*.png;*.jpeg")])
-        if file_path:
-            self.detector.detect_image(file_path)
-
-    def detect_video(self):
-        file_path = filedialog.askopenfilename(title="Select a Video", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
-        if file_path:
-            threading.Thread(target=self.detector.detect_video, args=(file_path, self.control_vars)).start()
-
-    def detect_webcam(self):
-        camera_index = int(self.camera_index.get().split()[-1])  # Extract the integer part
-        threading.Thread(target=self.detector.detect_webcam, args=(camera_index, self.control_vars)).start()
 
     def detect_folder(self):
         folder_path = filedialog.askdirectory(title="Select a Folder")
@@ -269,62 +288,103 @@ class ObjectDetectionApp:
     def show_loading_popup(self, folder_path):
         loading_popup = Toplevel(self.root)
         loading_popup.title("Processing")
-        loading_popup.geometry("300x150")
+        loading_popup.geometry("300x200")
         tk.Label(loading_popup, text="Processing images...").pack(pady=10)
         status_label = tk.Label(loading_popup, text="Processed 0/0 images")
         status_label.pack(pady=10)
-        open_dir_button = tk.Button(loading_popup, text="Open Result Folder", state=tk.DISABLED, command=lambda: os.startfile(os.path.join(folder_path, "result")))
-        open_dir_button.pack(pady=10)
-        threading.Thread(target=self.detector.detect_folder, args=(folder_path, status_label, open_dir_button)).start()
+        timer_label = tk.Label(loading_popup, text="Elapsed Time: 0s")
+        timer_label.pack(pady=10)
+        resolution_label = tk.Label(loading_popup, text="Low Res: 0, Med/High Res: 0")
+        resolution_label.pack(pady=10)
 
-    def view_screenshots(self):
-        os.startfile(os.path.abspath("screenshots"))
+        def run_detection():
+            try:
+                self.detector.detect_folder(folder_path, status_label, timer_label, resolution_label)
+            except Exception as e:
+                self.root.after(0, lambda: status_label.config(text=f"Error: {e}"))
+
+        thread = threading.Thread(target=run_detection)
+        thread.daemon = True  # Make thread daemon so it stops when the main program exits
+        self.active_threads.append(thread)
+        thread.start()
+
+    def process_video(self):
+        file_path = filedialog.askopenfilename(title="Select a Video", filetypes=[("Video Files", "*.mp4;*.avi;*.mov")])
+        if file_path:
+            self.create_progress_window()
+            thread = threading.Thread(target=self.detector.process_video, args=(file_path, self))
+            thread.daemon = True  # Make thread daemon
+            self.active_threads.append(thread)
+            thread.start()
+
+    def create_progress_window(self):
+        self.progress_window = Toplevel(self.root)
+        self.progress_window.title("Processing Progress")
+        self.progress_window.geometry("300x250")
+        self.progress_window.transient(self.root)
+        self.progress_window.grab_set()
+        tk.Label(self.progress_window, text="Processing Video...", font=("Arial", 12, "bold")).pack(pady=10)
+        self.split_label = tk.Label(self.progress_window, text="Frames Split: 0 / 0", font=("Arial", 10))
+        self.split_label.pack(pady=5)
+        self.processed_label = tk.Label(self.progress_window, text="Frames Processed: 0 / 0", font=("Arial", 10))
+        self.processed_label.pack(pady=5)
+        self.stitched_label = tk.Label(self.progress_window, text="Frames Stitched: 0 / 0", font=("Arial", 10))
+        self.stitched_label.pack(pady=5)
+        tk.Button(self.progress_window, text="Cancel", width=15, bg="red", fg="white", command=self.cancel_video_processing).pack(pady=20)
+        self.update_progress()
+
+    def update_progress(self):
+        if self.progress_window and self.progress_window.winfo_exists():
+            self.split_label.config(text=f"Frames Split: {self.detector.split_frames} / {self.detector.total_frames}")
+            self.processed_label.config(text=f"Frames Processed: {self.detector.processed_frames} / {self.detector.total_frames}")
+            self.stitched_label.config(text=f"Frames Stitched: {self.detector.stitched_frames} / {self.detector.total_frames}")
+            self.progress_window.after(100, self.update_progress)
+
+    def cancel_video_processing(self):
+        self.detector.cancel_processing()
+        if self.progress_window and self.progress_window.winfo_exists():
+            self.progress_window.destroy()
+
+    def view_results_menu(self):
+        self.clear_window()
+        tk.Label(self.root, text="View Results", font=("Arial", 14, "bold")).pack(pady=10)
+        tk.Button(self.root, text="View Folder Results", width=25, command=self.view_folder_results).pack(pady=10)
+        tk.Button(self.root, text="View Video Results", width=25, command=self.view_video_results).pack(pady=10)
+        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+
+    def view_folder_results(self):
+        folder_result_path = os.path.abspath("folder result")
+        if os.path.exists(folder_result_path):
+            os.startfile(folder_result_path)
+        else:
+            messagebox.showinfo("Info", "The 'folder result' directory does not exist yet. Process a folder to create it.")
+
+    def view_video_results(self):
+        os.startfile(os.path.abspath("RES"))
 
     def show_info(self):
         info_text = (
-            "📌 How to Use Object Detection App\n\n"
-            "1️⃣ **Detect Objects in Images**:\n"
-            "   - Click 'Object Detection' → 'Detect Image'.\n"
-            "   - Select an image file (.jpg, .png, .jpeg).\n"
-            "   - The detected objects will be displayed.\n"
-            "   - Press 'Q' to quit, 'L' to hide/show bounding boxes, 'S' to take a screenshot.\n\n"
-            
-            "2️⃣ **Detect Objects in Videos**:\n"
-            "   - Click 'Object Detection' → 'Detect Video'.\n"
-            "   - Select a video file (.mp4, .avi, .mov).\n"
-            "   - Object detection runs in real time.\n"
-            "   - Press 'Q' to quit, 'P' to pause/play, 'S' to take a screenshot.\n\n"
-            
-            "3️⃣ **Live Object Detection (Webcam)**:\n"
-            "   - Click 'Object Detection' → 'Detect Webcam'.\n"
-            "   - Select the camera from the dropdown menu.\n"
-            "   - Object detection runs using your selected webcam.\n"
-            "   - Press 'Q' to quit, 'P' to pause/play, 'S' to take a screenshot.\n\n"
-            
-            "4️⃣ **Detect Objects in Folder (Image Only)**:\n"
-            "   - Click 'Object Detection' → 'Detect Folder (Image Only)'.\n"
-            "   - Select a folder containing image files (.jpg, .png, .jpeg).\n"
-            "   - The detected objects will be saved in a 'result' folder within the selected folder.\n\n"
-            
-            "5️⃣ **Load a Custom Model**:\n"
-            "   - Go to 'Settings' → 'Load Model'.\n"
-            "   - Select a trained YOLO model (.pt file).\n"
-            "   - The new model will be loaded for detection.\n\n"
-            
-            "6️⃣ **View Screenshots**:\n"
-            "   - Click 'View Screenshots' to open the saved images.\n"
-            "   - Screenshots are saved in the 'screenshots' folder.\n\n"
-            
-            "⚠ Note: Ensure you have a trained YOLO model loaded before running detection.\n"
+            "📌 How to Use Object Detection with Super-Resolution\n\n"
+            "1️⃣ **Detect Folder**:\n"
+            "   - Select a folder with images (.jpg, .png, .jpeg).\n"
+            "   - Low-res images (<0.5MP) are upscaled then processed with YOLO.\n"
+            "   - Results saved in 'folder result/YYYY-MM-DD_HH-MM-SS'.\n\n"
+            "2️⃣ **Process Video**:\n"
+            "   - Select a video (.mp4, .avi, .mov).\n"
+            "   - Frames are split, low-res frames upscaled, processed with YOLO, then stitched back.\n"
+            "   - Results saved in 'RES'. Use 'Cancel' to stop processing.\n\n"
+            "3️⃣ **Settings**:\n"
+            "   - Load a custom YOLO model (.pt) from 'MODEL' folder.\n\n"
+            "4️⃣ **View Results**:\n"
+            "   - Choose to view folder or video results.\n\n"
+            "⚠ Note: Ensure YOLO and SR models are in 'MODEL'.\n"
             "Developed by **Syed Ali N.** 🚀"
         )
-        
         messagebox.showinfo("Application Info", info_text)
 
     def settings_menu(self):
         self.clear_window()
         tk.Label(self.root, text="Settings", font=("Arial", 14, "bold")).pack(pady=10)
-
         tk.Label(self.root, textvariable=self.model_name, font=("Arial", 12, "bold"), fg="blue").pack(pady=5)
         tk.Button(self.root, text="Load Model", width=25, command=self.load_model).pack(pady=5)
         tk.Button(self.root, text="Gather Dataset", width=25, command=lambda: webbrowser.open("https://universe.roboflow.com/")).pack(pady=5)
@@ -332,11 +392,22 @@ class ObjectDetectionApp:
         tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
 
     def load_model(self):
-        file_path = filedialog.askopenfilename(title="Select YOLO Model", filetypes=[("Model Files", "*.pt")])
+        file_path = filedialog.askopenfilename(initialdir=os.path.join(os.path.dirname(__file__), "MODEL"),
+                                               title="Select YOLO Model", filetypes=[("Model Files", "*.pt")])
         if file_path:
-            self.detector = YOLODetector(file_path)
-            self.model_name.set(f"Model: {os.path.basename(file_path)}")
+            self.detector = YOLODetector(model_path=file_path, sr_model_path=DEFAULT_SR_MODEL, root=self.root)
+            self.model_name.set(f"Model: {os.path.basename(file_path)}, SR: {os.path.basename(DEFAULT_SR_MODEL)}")
             messagebox.showinfo("Success", "Model loaded successfully!")
+
+    def quit_app(self):
+        # Cancel any ongoing video processing
+        self.detector.cancel_processing()
+        # Close any open progress windows
+        if self.progress_window and self.progress_window.winfo_exists():
+            self.progress_window.destroy()
+        # Destroy the main window and exit
+        self.root.destroy()
+        sys.exit(0)  # Ensure the program fully terminates
 
     def clear_window(self):
         for widget in self.root.winfo_children():
@@ -344,5 +415,5 @@ class ObjectDetectionApp:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ObjectDetectionApp(root)
+    app = CombinedDetectionApp(root)
     root.mainloop()
