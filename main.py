@@ -309,7 +309,6 @@ class YOLODetector:
                 server.login(GMAIL_USER, GMAIL_PASSWORD)
                 server.send_message(msg)
                 server.quit()
-                # Note: os.remove(detection_path) is intentionally omitted to keep detection files
                 print("Email sent successfully")
             except Exception as e:
                 print(f"Error sending email: {e}")
@@ -474,14 +473,31 @@ class CombinedDetectionApp:
     def main_menu(self):
         self.clear_window()
         tk.Label(self.root, text="Advanced Object Detection", font=("Arial", 16, "bold")).pack(pady=20)
-        tk.Button(self.root, text="Detect Folder", width=25, height=2, command=self.detect_folder).pack(pady=10)
-        tk.Button(self.root, text="Process Video", width=25, height=2, command=self.process_video).pack(pady=10)
-        tk.Button(self.root, text="Camera Detection", width=25, height=2, command=self.start_camera_detection).pack(pady=10)
+        tk.Button(self.root, text="Detection Options", width=25, height=2, command=self.detection_options_menu).pack(pady=10)
+        tk.Button(self.root, text="Customize Model", width=25, height=2, command=self.customize_model_menu).pack(pady=10)
         tk.Button(self.root, text="Settings", width=25, height=2, command=self.settings_menu).pack(pady=10)
         tk.Button(self.root, text="View Results", width=25, height=2, command=self.view_results_menu).pack(pady=10)
         tk.Button(self.root, text="Quit", width=25, height=2, bg="red", fg="white", command=self.quit_app).pack(pady=20)
         info_button = tk.Button(self.root, text="ℹ Info", font=("Arial", 10, "bold"), bg="gray", fg="white", command=self.show_info)
         info_button.place(x=10, y=410)
+
+    def detection_options_menu(self):
+        self.clear_window()
+        tk.Label(self.root, text="Detection Options", font=("Arial", 14, "bold")).pack(pady=10)
+        tk.Button(self.root, text="Detect Folder", width=25, command=self.detect_folder).pack(pady=10)
+        tk.Button(self.root, text="Process Video", width=25, command=self.process_video).pack(pady=10)
+        tk.Button(self.root, text="Camera Detection", width=25, command=self.start_camera_detection).pack(pady=10)
+        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+
+    def customize_model_menu(self):
+        self.clear_window()
+        tk.Label(self.root, text="Customize Model", font=("Arial", 14, "bold")).pack(pady=10)
+        tk.Label(self.root, textvariable=self.model_name, font=("Arial", 12, "bold"), fg="blue").pack(pady=5)
+        tk.Button(self.root, text="Load YOLO Model", width=25, command=self.load_yolo_model).pack(pady=5)
+        tk.Button(self.root, text="Load SR Model", width=25, command=self.load_sr_model).pack(pady=5)
+        tk.Button(self.root, text="Gather Dataset", width=25, command=lambda: webbrowser.open("https://universe.roboflow.com/")).pack(pady=5)
+        tk.Button(self.root, text="Train Model", width=25, command=lambda: webbrowser.open("https://colab.research.google.com/github/EdjeElectronics/Train-and-Deploy-YOLO-Models/blob/main/Train_YOLO_Models.ipynb")).pack(pady=5)
+        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
 
     def detect_folder(self):
         folder_path = filedialog.askdirectory(title="Select a Folder")
@@ -589,15 +605,13 @@ class CombinedDetectionApp:
     def show_info(self):
         info_text = (
             "📌 Advanced Object Detection System\n\n"
-            "1️⃣ **Detect Folder**: Process images with YOLO and SR.\n"
-            "   - Low-res (<0.5MP) images upscaled.\n"
-            "   - Results in 'folder result/YYYY-MM-DD_HH-MM-SS'.\n\n"
-            "2️⃣ **Process Video**: Split, process, and stitch video frames.\n"
-            "   - Results in 'RES'. Use 'Cancel' to stop.\n\n"
-            "3️⃣ **Camera Detection**: Real-time detection with alerts.\n"
-            "   - Email alerts after 4s detection, frames saved in 'detections'.\n\n"
-            "4️⃣ **Settings**: Customize models and detection parameters.\n\n"
-            "5️⃣ **View Results**: Access folder results, video results, or detection frames.\n\n"
+            "1️⃣ **Detection Options**: Choose detection mode.\n"
+            "   - Detect Folder: Process images, results in 'folder result'.\n"
+            "   - Process Video: Process videos, results in 'RES'.\n"
+            "   - Camera Detection: Real-time monitoring, frames in 'detections'.\n\n"
+            "2️⃣ **Customize Model**: Load models and access training resources.\n\n"
+            "3️⃣ **Settings**: Adjust detection parameters.\n\n"
+            "4️⃣ **View Results**: Access processed outputs.\n\n"
             "⚠ Ensure models are in 'MODEL' folder.\n"
             "Developed by **Syed Ali N.** 🚀"
         )
@@ -606,9 +620,6 @@ class CombinedDetectionApp:
     def settings_menu(self):
         self.clear_window()
         tk.Label(self.root, text="Settings", font=("Arial", 14, "bold")).pack(pady=10)
-        tk.Label(self.root, textvariable=self.model_name, font=("Arial", 12, "bold"), fg="blue").pack(pady=5)
-        tk.Button(self.root, text="Load YOLO Model", width=25, command=self.load_yolo_model).pack(pady=5)
-        tk.Button(self.root, text="Load SR Model", width=25, command=self.load_sr_model).pack(pady=5)
         tk.Label(self.root, text="Objects to Detect (comma-separated):").pack(pady=5)
         self.object_entry = tk.Entry(self.root, width=30)
         self.object_entry.insert(0, ", ".join(SETTINGS["object_list"]))
@@ -618,8 +629,6 @@ class CombinedDetectionApp:
         self.threshold_entry.insert(0, str(SETTINGS["threshold"]))
         self.threshold_entry.pack(pady=5)
         tk.Button(self.root, text="Save Settings", width=25, command=self.save_settings).pack(pady=10)
-        tk.Button(self.root, text="Gather Dataset", width=25, command=lambda: webbrowser.open("https://universe.roboflow.com/")).pack(pady=5)
-        tk.Button(self.root, text="Train Model", width=25, command=lambda: webbrowser.open("https://colab.research.google.com/github/EdjeElectronics/Train-and-Deploy-YOLO-Models/blob/main/Train_YOLO_Models.ipynb")).pack(pady=5)
         tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
 
     def load_yolo_model(self):
