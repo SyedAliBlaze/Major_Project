@@ -25,6 +25,7 @@ import platform
 import urllib.request
 import tempfile
 import json
+from ttkthemes import ThemedTk
 
 # Directory setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -616,7 +617,11 @@ class CombinedDetectionApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Advanced Object Detection System")
-        self.root.geometry("500x450")
+        self.root.geometry("600x500")
+        self.root.configure(bg="#0a0a0a")
+        self.style = ttk.Style()
+        self.apply_theme()
+        
         self.detector = YOLODetector(root=self.root)
         self.model_name = tk.StringVar()
         self.model_name.set(f"YOLO: {os.path.basename(SETTINGS['yolo_model'])}, SR: {os.path.basename(SETTINGS['sr_model'])}")
@@ -627,35 +632,56 @@ class CombinedDetectionApp:
         self.active_threads = []
         self.main_menu()
 
+    def apply_theme(self):
+        """Apply a futuristic style to ttk widgets"""
+        self.style.theme_use("clam")
+        self.style.configure("TButton", font=("Orbitron", 12), padding=10, 
+                           background="#000", foreground="#00ffff", borderwidth=0)
+        self.style.map("TButton", background=[("active", "#005f5f")])
+        self.style.configure("TLabel", font=("Orbitron", 14), 
+                           background="#0a0a0a", foreground="#00ffff")
+
+    def create_futuristic_button(self, text, command, color="#00ffff", width=25):
+        button = ttk.Button(self.root, text=text, command=command, 
+                          style="TButton", width=width)
+        button.pack(pady=10, ipadx=10, ipady=5, fill="x")
+        return button
+
     def main_menu(self):
         self.clear_window()
-        tk.Label(self.root, text="Advanced Object Detection", font=("Arial", 16, "bold")).pack(pady=20)
-        tk.Button(self.root, text="Detection Options", width=25, height=2, command=self.detection_options_menu).pack(pady=10)
-        tk.Button(self.root, text="Customize Model", width=25, height=2, command=self.customize_model_menu).pack(pady=10)
-        tk.Button(self.root, text="Settings", width=25, height=2, command=self.settings_menu).pack(pady=10)
-        tk.Button(self.root, text="View Results", width=25, height=2, command=self.view_results_menu).pack(pady=10)
-        tk.Button(self.root, text="Quit", width=25, height=2, bg="red", fg="white", command=self.quit_app).pack(pady=20)
-        info_button = tk.Button(self.root, text="ℹ Info", font=("Arial", 10, "bold"), bg="gray", fg="white", command=self.show_info)
-        info_button.place(x=10, y=410)
+        ttk.Label(self.root, text="Advanced Object Detection", 
+                 font=("Orbitron", 20)).pack(pady=20)
+        self.create_futuristic_button("Start Detection", self.detection_options_menu)
+        self.create_futuristic_button("Customize Model", self.customize_model_menu)
+        self.create_futuristic_button("Settings", self.settings_menu)
+        self.create_futuristic_button("View Results", self.view_results_menu)
+        self.create_futuristic_button("Quit", self.quit_app, color="#ff0033")
+        info_button = ttk.Button(self.root, text="ℹ Info", 
+                               command=self.show_info,
+                               style="TButton")
+        info_button.place(x=10, y=460)
 
     def detection_options_menu(self):
         self.clear_window()
-        tk.Label(self.root, text="Detection Options", font=("Arial", 14, "bold")).pack(pady=10)
-        tk.Button(self.root, text="Detect Folder", width=25, command=self.detect_folder).pack(pady=10)
-        tk.Button(self.root, text="Process Video", width=25, command=self.process_video).pack(pady=10)
-        tk.Button(self.root, text="Camera Detection", width=25, command=self.start_camera_detection).pack(pady=10)
-        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+        ttk.Label(self.root, text="Detection Options").pack(pady=10)
+        self.create_futuristic_button("Detect Folder", self.detect_folder)
+        self.create_futuristic_button("Process Video", self.process_video)
+        self.create_futuristic_button("Camera Detection", self.start_camera_detection)
+        self.create_futuristic_button("Back", self.main_menu, color="#808080")
 
     def customize_model_menu(self):
         self.clear_window()
-        tk.Label(self.root, text="Customize Model", font=("Arial", 14, "bold")).pack(pady=10)
-        tk.Label(self.root, textvariable=self.model_name, font=("Arial", 12, "bold"), fg="blue").pack(pady=5)
-        tk.Button(self.root, text="Load YOLO Model", width=25, command=self.load_yolo_model).pack(pady=5)
-        tk.Button(self.root, text="Load SR Model", width=25, command=self.load_sr_model).pack(pady=5)
-        tk.Button(self.root, text="Gather Dataset", width=25, command=lambda: webbrowser.open("https://universe.roboflow.com/")).pack(pady=5)
-        tk.Button(self.root, text="Train Model", width=25, command=lambda: webbrowser.open("https://colab.research.google.com/github/EdjeElectronics/Train-and-Deploy-YOLO-Models/blob/main/Train_YOLO_Models.ipynb")).pack(pady=5)
-        tk.Button(self.root, text="Source Code", width=25, command=self.open_source_code_dir).pack(pady=5)
-        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+        ttk.Label(self.root, text="Customize Model").pack(pady=10)
+        ttk.Label(self.root, textvariable=self.model_name, 
+                 font=("Orbitron", 12)).pack(pady=5)
+        self.create_futuristic_button("Load YOLO Model", self.load_yolo_model)
+        self.create_futuristic_button("Load SR Model", self.load_sr_model)
+        self.create_futuristic_button("Gather Dataset", 
+                                    lambda: webbrowser.open("https://universe.roboflow.com/"))
+        self.create_futuristic_button("Train Model", 
+                                    lambda: webbrowser.open("https://colab.research.google.com/github/EdjeElectronics/Train-and-Deploy-YOLO-Models/blob/main/Train_YOLO_Models.ipynb"))
+        self.create_futuristic_button("Source Code", self.open_source_code_dir)
+        self.create_futuristic_button("Back", self.main_menu, color="#808080")
 
     def open_source_code_dir(self):
         script_dir = os.path.abspath(SCRIPT_DIR)
@@ -679,12 +705,13 @@ class CombinedDetectionApp:
         loading_popup = Toplevel(self.root)
         loading_popup.title("Processing")
         loading_popup.geometry("300x200")
-        tk.Label(loading_popup, text="Processing images...").pack(pady=10)
-        status_label = tk.Label(loading_popup, text="Processed 0/0 images")
+        loading_popup.configure(bg="#0a0a0a")
+        ttk.Label(loading_popup, text="Processing images...").pack(pady=10)
+        status_label = ttk.Label(loading_popup, text="Processed 0/0 images")
         status_label.pack(pady=10)
-        timer_label = tk.Label(loading_popup, text="Elapsed Time: 0s")
+        timer_label = ttk.Label(loading_popup, text="Elapsed Time: 0s")
         timer_label.pack(pady=10)
-        resolution_label = tk.Label(loading_popup, text="Low Res: 0, Med/High Res: 0")
+        resolution_label = ttk.Label(loading_popup, text="Low Res: 0, Med/High Res: 0")
         resolution_label.pack(pady=10)
         def run_detection():
             try:
@@ -709,16 +736,22 @@ class CombinedDetectionApp:
         self.progress_window = Toplevel(self.root)
         self.progress_window.title("Processing Progress")
         self.progress_window.geometry("300x250")
+        self.progress_window.configure(bg="#0a0a0a")
         self.progress_window.transient(self.root)
         self.progress_window.grab_set()
-        tk.Label(self.progress_window, text="Processing Video...", font=("Arial", 12, "bold")).pack(pady=10)
-        self.split_label = tk.Label(self.progress_window, text="Frames Split: 0 / 0", font=("Arial", 10))
+        ttk.Label(self.progress_window, text="Processing Video...", 
+                 font=("Orbitron", 12)).pack(pady=10)
+        self.split_label = ttk.Label(self.progress_window, 
+                                   text="Frames Split: 0 / 0")
         self.split_label.pack(pady=5)
-        self.processed_label = tk.Label(self.progress_window, text="Frames Processed: 0 / 0", font=("Arial", 10))
+        self.processed_label = ttk.Label(self.progress_window, 
+                                       text="Frames Processed: 0 / 0")
         self.processed_label.pack(pady=5)
-        self.stitched_label = tk.Label(self.progress_window, text="Frames Stitched: 0 / 0", font=("Arial", 10))
+        self.stitched_label = ttk.Label(self.progress_window, 
+                                      text="Frames Stitched: 0 / 0")
         self.stitched_label.pack(pady=5)
-        tk.Button(self.progress_window, text="Cancel", width=15, bg="red", fg="white", command=self.cancel_video_processing).pack(pady=20)
+        self.create_futuristic_button("Cancel", self.cancel_video_processing, 
+                                    color="#ff0033", width=15)
         self.update_progress()
 
     def update_progress(self):
@@ -748,11 +781,11 @@ class CombinedDetectionApp:
 
     def view_results_menu(self):
         self.clear_window()
-        tk.Label(self.root, text="View Results", font=("Arial", 14, "bold")).pack(pady=10)
-        tk.Button(self.root, text="View Folder Results", width=25, command=self.view_folder_results).pack(pady=10)
-        tk.Button(self.root, text="View Video Results", width=25, command=self.view_video_results).pack(pady=10)
-        tk.Button(self.root, text="View Detections", width=25, command=self.view_detections).pack(pady=10)
-        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+        ttk.Label(self.root, text="View Results").pack(pady=10)
+        self.create_futuristic_button("View Folder Results", self.view_folder_results)
+        self.create_futuristic_button("View Video Results", self.view_video_results)
+        self.create_futuristic_button("View Detections", self.view_detections)
+        self.create_futuristic_button("Back", self.main_menu, color="#808080")
 
     def view_folder_results(self):
         folder_result_path = os.path.abspath("folder result")
@@ -788,35 +821,41 @@ class CombinedDetectionApp:
 
     def settings_menu(self):
         self.clear_window()
-        tk.Label(self.root, text="Settings", font=("Arial", 14, "bold")).pack(pady=10)
+        ttk.Label(self.root, text="Settings").pack(pady=10)
         
-        tk.Label(self.root, text="Gmail Address:").pack(pady=5)
-        self.gmail_entry = tk.Entry(self.root, width=30)
+        ttk.Label(self.root, text="Gmail Address:").pack(pady=5)
+        self.gmail_entry = tk.Entry(self.root, width=30, bg="#1a1a1a", 
+                                  fg="#00ffff", insertbackground="#00ffff")
         self.gmail_entry.insert(0, SETTINGS["gmail_user"])
         self.gmail_entry.pack(pady=5)
         
-        tk.Label(self.root, text="Gmail App Password:").pack(pady=5)
-        self.password_entry = tk.Entry(self.root, width=30, show="*")
+        ttk.Label(self.root, text="Gmail App Password:").pack(pady=5)
+        self.password_entry = tk.Entry(self.root, width=30, show="*", 
+                                     bg="#1a1a1a", fg="#00ffff", 
+                                     insertbackground="#00ffff")
         self.password_entry.insert(0, SETTINGS["gmail_password"])
         self.password_entry.pack(pady=5)
         
-        tk.Label(self.root, text="Receiver Email:").pack(pady=5)
-        self.receiver_entry = tk.Entry(self.root, width=30)
+        ttk.Label(self.root, text="Receiver Email:").pack(pady=5)
+        self.receiver_entry = tk.Entry(self.root, width=30, bg="#1a1a1a", 
+                                     fg="#00ffff", insertbackground="#00ffff")
         self.receiver_entry.insert(0, SETTINGS["receiver_email"])
         self.receiver_entry.pack(pady=5)
         
-        tk.Label(self.root, text="Objects to Detect (comma-separated):").pack(pady=5)
-        self.object_entry = tk.Entry(self.root, width=30)
+        ttk.Label(self.root, text="Objects to Detect (comma-separated):").pack(pady=5)
+        self.object_entry = tk.Entry(self.root, width=30, bg="#1a1a1a", 
+                                   fg="#00ffff", insertbackground="#00ffff")
         self.object_entry.insert(0, ", ".join(SETTINGS["object_list"]))
         self.object_entry.pack(pady=5)
         
-        tk.Label(self.root, text="Confidence Threshold (0.0-1.0):").pack(pady=5)
-        self.threshold_entry = tk.Entry(self.root, width=10)
+        ttk.Label(self.root, text="Confidence Threshold (0.0-1.0):").pack(pady=5)
+        self.threshold_entry = tk.Entry(self.root, width=10, bg="#1a1a1a", 
+                                      fg="#00ffff", insertbackground="#00ffff")
         self.threshold_entry.insert(0, str(SETTINGS["threshold"]))
         self.threshold_entry.pack(pady=5)
         
-        tk.Button(self.root, text="Save Settings", width=25, command=self.save_settings).pack(pady=10)
-        tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+        self.create_futuristic_button("Save Settings", self.save_settings)
+        self.create_futuristic_button("Back", self.main_menu, color="#808080")
 
     def load_yolo_model(self):
         file_path = filedialog.askopenfilename(initialdir=os.path.join(SCRIPT_DIR, "MODEL"),
@@ -881,6 +920,6 @@ class CombinedDetectionApp:
 if __name__ == "__main__":
     python_39_executable = switch_to_python_39()
     check_and_install_requirements("requirements.txt")
-    root = tk.Tk()
+    root = ThemedTk(theme="equilux")
     app = CombinedDetectionApp(root)
     root.mainloop()
