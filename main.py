@@ -9,8 +9,8 @@ from ultralytics import YOLO
 import logging
 from datetime import datetime
 import torch
-from basicsr.archs.rrdbnet_arch import RRDBNet  # Real-ESRGAN dependency
-from realesrgan import RealESRGANer  # Real-ESRGAN dependency
+from basicsr.archs.rrdbnet_arch import RRDBNet
+from realesrgan import RealESRGANer
 import time
 import sys
 from queue import Queue
@@ -19,10 +19,12 @@ import smtplib
 from email.message import EmailMessage
 import mimetypes
 import math
-
-# Gmail credentials for email alerts
-GMAIL_USER = "projectblaze007@gmail.com"
-GMAIL_PASSWORD = "dzry siey cjko anwv"  # Replace with your actual App Password
+import pkg_resources
+import subprocess
+import platform
+import urllib.request
+import tempfile
+import json
 
 # Directory setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,17 +32,146 @@ for folder in ["TEMP", "TEMP_RES", "RES", "MODEL", "folder result", "detections"
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-# Default models
+# Settings file path
+SETTINGS_FILE = os.path.join(SCRIPT_DIR, "settings.json")
+
+# Default models and Gmail credentials
 DEFAULT_YOLO_MODEL = os.path.join(SCRIPT_DIR, "MODEL", "yolo11s.pt")
 DEFAULT_SR_MODEL = os.path.join(SCRIPT_DIR, "MODEL", "RealESRGAN_x4plus.pth")
+GMAIL_USER = "projectblaze007@gmail.com"
+GMAIL_PASSWORD = "dzry siey cjko anwv"  # Replace with your actual App Password
 
 # Default settings
-SETTINGS = {
+DEFAULT_SETTINGS = {
     "yolo_model": DEFAULT_YOLO_MODEL,
     "sr_model": DEFAULT_SR_MODEL,
     "object_list": ["person"],
-    "threshold": 0.9
+    "threshold": 0.9,
+    "gmail_user": GMAIL_USER,
+    "gmail_password": GMAIL_PASSWORD,
+    "receiver_email": "blazingsyedali451@gmail.com"
 }
+
+# Load settings from file or use defaults
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Error loading settings: {e}. Using default settings.")
+            return DEFAULT_SETTINGS.copy()
+    return DEFAULT_SETTINGS.copy()
+
+# Save settings to file
+def save_settings_to_file(settings):
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=4)
+        print("Settings saved to file.")
+    except IOError as e:
+        print(f"Error saving settings: {e}")
+
+SETTINGS = load_settings()
+
+def check_python_version(required_version="3.9"):
+    current_version = platform.python_version()
+    if current_version.startswith(required_version):
+        print(f"Python version {current_version} is compatible with the required version {required_version}.x.")
+        return True
+    else:
+        print(f"Current Python version {current_version} does not match required version {required_version}.x.")
+        return False
+
+def find_python_39():
+    try:
+        result = subprocess.run(["py", "-3.9", "--version"], capture_output=True, text=True, check=False)
+        if result.returncode == 0 and "Python 3.9" in result.stdout:
+            print("Python 3.9 is installed on the system.")
+            result = subprocess.run(["py", "-3.9", "-c", "import sys; print(sys.executable)"], 
+                                    capture_output=True, text=True, check=True)
+            return result.stdout.strip()
+        else:
+            print("Python 3.9 is not found among installed versions.")
+            return None
+    except subprocess.CalledProcessError:
+        print("Error checking for Python 3.9 with 'py' launcher.")
+        return None
+    except FileNotFoundError:
+        print("'py' launcher not found. Python Launcher may not be installed.")
+        return None
+
+def download_and_install_python_39():
+    python_39_url = "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
+    installer_path = os.path.join(tempfile.gettempdir(), "python-3.9.13-amd64.exe")
+    try:
+        print(f"Downloading Python 3.9 installer from {python_39_url}...")
+        urllib.request.urlretrieve(python_39_url, installer_path)
+        print(f"Downloaded installer to {installer_path}")
+        install_command = [installer_path, "/quiet", "InstallAllUsers=1", "PrependPath=1"]
+        print("Installing Python 3.9. This may require Administrator privileges...")
+        subprocess.run(install_command, check=True)
+        print("Python 3.9 installation completed.")
+        os.remove(installer_path)
+        print(f"Cleaned up installer file: {installer_path}")
+        new_python_path = find_python_39()
+        if new_python_path:
+            return new_python_path
+        else:
+            raise Exception("Python 3.9 installed but could not be located.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install Python 3.9: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error during Python 3.9 installation: {e}")
+        sys.exit(1)
+
+def switch_to_python_39():
+    if check_python_version("3.9"):
+        return sys.executable
+    python_39_path = find_python_39()
+    if python_39_path:
+        print(f"Found Python 3.9 at {python_39_path}. Relaunching script...")
+        subprocess.run([python_39_path, *sys.argv], check=True)
+        sys.exit(0)
+    else:
+        print("Python 3.9 not found. Proceeding to install...")
+        python_39_path = download_and_install_python_39()
+        print(f"Relaunching script with newly installed Python 3.9 at {python_39_path}...")
+        subprocess.run([python_39_path, *sys.argv], check=True)
+        sys.exit(0)
+
+def check_and_install_requirements(requirements_file="requirements.txt"):
+    try:
+        with open(requirements_file, "r") as f:
+            required = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        installed = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+        for req in required:
+            try:
+                pkg_name, pkg_version = req.split("==")
+                pkg_name = pkg_name.lower()
+                if pkg_name not in installed:
+                    print(f"{pkg_name} is not installed. Installing {req}...")
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", req])
+                else:
+                    installed_version = installed[pkg_name]
+                    if installed_version != pkg_version:
+                        print(f"{pkg_name} version mismatch: required {pkg_version}, installed {installed_version}. Reinstalling {req}...")
+                        subprocess.check_call([sys.executable, "-m", "pip", "install", req, "--force-reinstall"])
+                    else:
+                        print(f"{pkg_name}=={pkg_version} is already installed and matches the required version.")
+            except ValueError:
+                print(f"Invalid requirement format: {req}. Skipping...")
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to install {req}: {e}")
+                sys.exit(1)
+        print("All required packages are installed with the correct versions.")
+    except FileNotFoundError:
+        print(f"Error: {requirements_file} not found in the current directory.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def suppress_yolo_logs():
     logging.getLogger("ultralytics").setLevel(logging.CRITICAL)
@@ -50,8 +181,8 @@ def restore_logs():
 
 def classify_resolution(width, height):
     total_pixels = width * height
-    low_threshold = 500_000  # 0.5 million pixels
-    high_threshold = 2_000_000  # 2 megapixels
+    low_threshold = 500_000
+    high_threshold = 2_000_000
     if total_pixels < low_threshold:
         return "Low Resolution"
     elif total_pixels >= high_threshold:
@@ -62,10 +193,15 @@ def classify_resolution(width, height):
 def get_available_cameras(max_cameras=10):
     available_cameras = []
     for i in range(max_cameras):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            available_cameras.append(i)
-            cap.release()
+        try:
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                ret, _ = cap.read()
+                if ret:
+                    available_cameras.append(i)
+                cap.release()
+        except Exception as e:
+            print(f"Camera {i} unavailable: {e}")
     return available_cameras
 
 def get_contrasting_color(background_color):
@@ -136,22 +272,18 @@ class YOLODetector:
         if not self.yolo_model or not self.sr_model:
             messagebox.showerror("Error", "Model(s) not loaded!")
             return
-
         date_time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result_subfolder = os.path.join("folder result", date_time_str)
         os.makedirs(result_subfolder, exist_ok=True)
-
         image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         total_files = len(image_files)
         processed_files = 0
         low_res_count = 0
         high_med_res_count = 0
-
         if total_files == 0:
             messagebox.showwarning("Warning", "No valid images found!")
             self.root.after(0, lambda: status_label.config(text="No valid images found!"))
             return
-
         start_time = time.time()
         for filename in image_files:
             file_path = os.path.join(folder_path, filename)
@@ -180,7 +312,6 @@ class YOLODetector:
                 self.root.after(0, lambda: timer_label.config(text=f"Elapsed Time: {elapsed_time}s"))
             except Exception:
                 continue
-
         elapsed_time = int(time.time() - start_time)
         self.root.after(0, lambda: status_label.config(text="Processing complete!"))
         self.root.after(0, lambda: timer_label.config(text=f"Elapsed Time: {elapsed_time}s"))
@@ -284,34 +415,43 @@ class YOLODetector:
 
     def save_detection_frame(self, frame):
         detection_dir = os.path.join(SCRIPT_DIR, 'detections')
+        os.makedirs(detection_dir, exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = os.path.join(detection_dir, f'detection_{timestamp}.png')
         cv2.imwrite(filename, frame)
         return filename
 
-    def email_alert_background(self, subject, body, to, frame):
+    def email_alert_background(self, subject, body, frame):
         def send_email():
             try:
                 detection_path = self.save_detection_frame(frame)
                 msg = EmailMessage()
                 msg.set_content(body)
                 msg['Subject'] = subject
-                msg['From'] = GMAIL_USER
-                msg['To'] = to
+                msg['From'] = SETTINGS["gmail_user"]
+                msg['To'] = SETTINGS["receiver_email"]
+                
                 with open(detection_path, 'rb') as img:
                     ctype, encoding = mimetypes.guess_type(detection_path)
                     if ctype is None or encoding is not None:
                         ctype = 'application/octet-stream'
                     maintype, subtype = ctype.split('/', 1)
                     msg.add_attachment(img.read(), maintype=maintype, subtype=subtype, filename=os.path.basename(detection_path))
+                
                 server = smtplib.SMTP('smtp.gmail.com', 587)
                 server.starttls()
-                server.login(GMAIL_USER, GMAIL_PASSWORD)
+                server.login(SETTINGS["gmail_user"], SETTINGS["gmail_password"])
                 server.send_message(msg)
                 server.quit()
+                os.remove(detection_path)
                 print("Email sent successfully")
+            except smtplib.SMTPAuthenticationError:
+                print("SMTP Authentication Error: Check your Gmail credentials or App Password")
+            except smtplib.SMTPException as e:
+                print(f"SMTP Error: {e}")
             except Exception as e:
                 print(f"Error sending email: {e}")
+
         email_thread = threading.Thread(target=send_email)
         email_thread.daemon = True
         email_thread.start()
@@ -320,6 +460,7 @@ class YOLODetector:
         if not self.yolo_model:
             messagebox.showerror("Error", "YOLO model not loaded!")
             return
+
         suppress_yolo_logs()
         caps = [cv2.VideoCapture(i) for i in camera_indices]
         num_cameras = len(camera_indices)
@@ -327,12 +468,12 @@ class YOLODetector:
         screen_width, screen_height = 1400, 700
         cv2.namedWindow('Cameras', cv2.WINDOW_NORMAL)
         cv2.resizeWindow('Cameras', screen_width, screen_height)
-        
+
         alert_queue = Queue()
-        alert_thread = threading.Thread(target=lambda: show_alert(alert_queue))
+        alert_thread = threading.Thread(target=lambda: self.show_alert(alert_queue))
         alert_thread.daemon = True
         alert_thread.start()
-        
+
         selected_camera = single_camera_index if single_camera_index is not None else num_cameras - 1
         detection_start_times = {}
         email_sent = {}
@@ -356,13 +497,13 @@ class YOLODetector:
                         selected_camera = idx
 
         cv2.setMouseCallback('Cameras', mouse_callback)
-        
+
         while True:
             frames = []
             current_time = perf_counter()
             delta_time = current_time - last_frame_time
             last_frame_time = current_time
-            
+
             for i, cap in enumerate(caps):
                 ret, frame = cap.read()
                 if ret:
@@ -387,13 +528,12 @@ class YOLODetector:
                                         if duration >= 4 and key not in email_sent:
                                             self.email_alert_background(
                                                 f"Object {name} Detected",
-                                                f"Object '{name}' detected for >4s in Camera {i + 1}.",
-                                                "blazingsyedali451@gmail.com",
+                                                f"Object '{name}' has been detected for more than 4 seconds in Camera {i + 1}.",
                                                 frame
                                             )
                                             email_sent[key] = True
                                             alert_queue.put(name)
-                                        cv2.putText(frame, f"ALERT: {name} ({conf:.2f})", (10, 30), 
+                                        cv2.putText(frame, f"ALERT: {name} ({conf:.2f})", (10, 30),
                                                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                                         cv2.rectangle(frame, (0, 0), (frame.shape[1], frame.shape[0]), (0, 0, 255), 3)
                         for key in list(detection_start_times.keys()):
@@ -408,7 +548,7 @@ class YOLODetector:
                 else:
                     frame = create_no_input_frame(640, 480)
                 frames.append(frame)
-            
+
             screen_width = cv2.getWindowImageRect('Cameras')[2]
             screen_height = cv2.getWindowImageRect('Cameras')[3]
             frame_height = screen_height // grid_size
@@ -427,11 +567,11 @@ class YOLODetector:
                 cv2.rectangle(enlarged_frame, (screen_width - 50, screen_height - 50), (screen_width - 10, screen_height - 10), (0, 255, 0), -1)
                 cv2.putText(enlarged_frame, ">", (screen_width - 40, screen_height - 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 font_color = get_contrasting_color(enlarged_frame[0, 0])
-                cv2.putText(enlarged_frame, f"Camera {selected_camera + 1}", (10, 40), 
+                cv2.putText(enlarged_frame, f"Camera {selected_camera + 1}", (10, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, font_color, 2)
                 cv2.imshow('Cameras', enlarged_frame)
             else:
-                grid_frame = np.zeros((frame_height * grid_size + 1 * (grid_size - 1), 
+                grid_frame = np.zeros((frame_height * grid_size + 1 * (grid_size - 1),
                                       frame_width * grid_size + 1 * (grid_size - 1), 3), dtype=np.uint8)
                 grid_frame.fill(255)
                 for idx, frame in enumerate(resized_frames):
@@ -441,19 +581,36 @@ class YOLODetector:
                     grid_frame[y1:y1 + frame_height, x1:x1 + frame_width] = frame
                     if idx < num_cameras:
                         font_color = get_contrasting_color(frame[0, 0])
-                        cv2.putText(grid_frame, f"Camera {idx + 1}", (x1 + 10, y1 + 30), 
+                        cv2.putText(grid_frame, f"Camera {idx + 1}", (x1 + 10, y1 + 30),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1, font_color, 2)
                 cv2.imshow('Cameras', grid_frame)
-            
+
             if cv2.waitKey(1) & 0xFF == ord('q') or cv2.getWindowProperty('Cameras', cv2.WND_PROP_VISIBLE) < 1:
                 break
-        
+
         for cap in caps:
             cap.release()
         cv2.destroyAllWindows()
         restore_logs()
         alert_queue.put(None)
         alert_thread.join()
+
+    def show_alert(self, alert_queue):
+        alert_cooldown = {}
+        cooldown_period = 5
+        while True:
+            try:
+                obj = alert_queue.get(timeout=0.1)
+                if obj is None:
+                    break
+                current_time = perf_counter()
+                if current_time - alert_cooldown.get(obj, 0) >= cooldown_period:
+                    messagebox.showinfo("Alert", f"Object '{obj}' detected!")
+                    alert_cooldown[obj] = current_time
+            except Queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Error in alert thread: {e}")
 
 class CombinedDetectionApp:
     def __init__(self, root):
@@ -497,7 +654,21 @@ class CombinedDetectionApp:
         tk.Button(self.root, text="Load SR Model", width=25, command=self.load_sr_model).pack(pady=5)
         tk.Button(self.root, text="Gather Dataset", width=25, command=lambda: webbrowser.open("https://universe.roboflow.com/")).pack(pady=5)
         tk.Button(self.root, text="Train Model", width=25, command=lambda: webbrowser.open("https://colab.research.google.com/github/EdjeElectronics/Train-and-Deploy-YOLO-Models/blob/main/Train_YOLO_Models.ipynb")).pack(pady=5)
+        tk.Button(self.root, text="Source Code", width=25, command=self.open_source_code_dir).pack(pady=5)
         tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
+
+    def open_source_code_dir(self):
+        script_dir = os.path.abspath(SCRIPT_DIR)
+        try:
+            if os.name == 'nt':  # Windows
+                os.startfile(script_dir)
+            elif os.name == 'posix':  # macOS/Linux
+                opener = 'open' if sys.platform == 'darwin' else 'xdg-open'
+                subprocess.Popen([opener, script_dir])
+            else:
+                messagebox.showerror("Error", "Unsupported operating system.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open directory: {e}")
 
     def detect_folder(self):
         folder_path = filedialog.askdirectory(title="Select a Folder")
@@ -515,13 +686,11 @@ class CombinedDetectionApp:
         timer_label.pack(pady=10)
         resolution_label = tk.Label(loading_popup, text="Low Res: 0, Med/High Res: 0")
         resolution_label.pack(pady=10)
-
         def run_detection():
             try:
                 self.detector.detect_folder(folder_path, status_label, timer_label, resolution_label)
             except Exception as e:
                 self.root.after(0, lambda: status_label.config(text=f"Error: {e}"))
-
         thread = threading.Thread(target=run_detection)
         thread.daemon = True
         self.active_threads.append(thread)
@@ -620,14 +789,32 @@ class CombinedDetectionApp:
     def settings_menu(self):
         self.clear_window()
         tk.Label(self.root, text="Settings", font=("Arial", 14, "bold")).pack(pady=10)
+        
+        tk.Label(self.root, text="Gmail Address:").pack(pady=5)
+        self.gmail_entry = tk.Entry(self.root, width=30)
+        self.gmail_entry.insert(0, SETTINGS["gmail_user"])
+        self.gmail_entry.pack(pady=5)
+        
+        tk.Label(self.root, text="Gmail App Password:").pack(pady=5)
+        self.password_entry = tk.Entry(self.root, width=30, show="*")
+        self.password_entry.insert(0, SETTINGS["gmail_password"])
+        self.password_entry.pack(pady=5)
+        
+        tk.Label(self.root, text="Receiver Email:").pack(pady=5)
+        self.receiver_entry = tk.Entry(self.root, width=30)
+        self.receiver_entry.insert(0, SETTINGS["receiver_email"])
+        self.receiver_entry.pack(pady=5)
+        
         tk.Label(self.root, text="Objects to Detect (comma-separated):").pack(pady=5)
         self.object_entry = tk.Entry(self.root, width=30)
         self.object_entry.insert(0, ", ".join(SETTINGS["object_list"]))
         self.object_entry.pack(pady=5)
+        
         tk.Label(self.root, text="Confidence Threshold (0.0-1.0):").pack(pady=5)
         self.threshold_entry = tk.Entry(self.root, width=10)
         self.threshold_entry.insert(0, str(SETTINGS["threshold"]))
         self.threshold_entry.pack(pady=5)
+        
         tk.Button(self.root, text="Save Settings", width=25, command=self.save_settings).pack(pady=10)
         tk.Button(self.root, text="Back", width=25, bg="gray", command=self.main_menu).pack(pady=20)
 
@@ -638,6 +825,7 @@ class CombinedDetectionApp:
             SETTINGS["yolo_model"] = file_path
             self.detector.load_models()
             self.model_name.set(f"YOLO: {os.path.basename(SETTINGS['yolo_model'])}, SR: {os.path.basename(SETTINGS['sr_model'])}")
+            save_settings_to_file(SETTINGS)
             messagebox.showinfo("Success", "YOLO model loaded successfully!")
 
     def load_sr_model(self):
@@ -647,10 +835,22 @@ class CombinedDetectionApp:
             SETTINGS["sr_model"] = file_path
             self.detector.load_models()
             self.model_name.set(f"YOLO: {os.path.basename(SETTINGS['yolo_model'])}, SR: {os.path.basename(SETTINGS['sr_model'])}")
+            save_settings_to_file(SETTINGS)
             messagebox.showinfo("Success", "SR model loaded successfully!")
 
     def save_settings(self):
+        gmail_user = self.gmail_entry.get().strip()
+        gmail_password = self.password_entry.get().strip()
+        receiver_email = self.receiver_entry.get().strip()
+        if not gmail_user or not gmail_password or not receiver_email:
+            messagebox.showerror("Error", "Gmail address, password, and receiver email cannot be empty!")
+            return
+        
+        SETTINGS["gmail_user"] = gmail_user
+        SETTINGS["gmail_password"] = gmail_password
+        SETTINGS["receiver_email"] = receiver_email
         SETTINGS["object_list"] = [obj.strip() for obj in self.object_entry.get().split(',')]
+        
         try:
             SETTINGS["threshold"] = float(self.threshold_entry.get())
             if not 0 <= SETTINGS["threshold"] <= 1:
@@ -659,6 +859,7 @@ class CombinedDetectionApp:
                 raise FileNotFoundError(f"YOLO model file '{SETTINGS['yolo_model']}' not found")
             if not os.path.exists(SETTINGS["sr_model"]):
                 raise FileNotFoundError(f"SR model file '{SETTINGS['sr_model']}' not found")
+            save_settings_to_file(SETTINGS)
             messagebox.showinfo("Settings", "Settings saved successfully!")
             self.main_menu()
         except ValueError as e:
@@ -677,22 +878,9 @@ class CombinedDetectionApp:
         for widget in self.root.winfo_children():
             widget.destroy()
 
-def show_alert(alert_queue):
-    alert_cooldown = {}
-    cooldown_period = 5
-    while True:
-        try:
-            obj = alert_queue.get(timeout=0.1)
-            if obj is None:
-                break
-            current_time = perf_counter()
-            if current_time - alert_cooldown.get(obj, 0) >= cooldown_period:
-                messagebox.showinfo("Alert", f"Object '{obj}' detected!")
-                alert_cooldown[obj] = current_time
-        except Queue.Empty:
-            continue
-
 if __name__ == "__main__":
+    python_39_executable = switch_to_python_39()
+    check_and_install_requirements("requirements.txt")
     root = tk.Tk()
     app = CombinedDetectionApp(root)
     root.mainloop()
