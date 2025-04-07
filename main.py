@@ -39,8 +39,8 @@ SETTINGS_FILE = os.path.join(SCRIPT_DIR, "settings.json")
 # Default models and Gmail credentials
 DEFAULT_YOLO_MODEL = os.path.join(SCRIPT_DIR, "MODEL", "yolo11s.pt")
 DEFAULT_SR_MODEL = os.path.join(SCRIPT_DIR, "MODEL", "RealESRGAN_x4plus.pth")
-GMAIL_USER = "projectblaze007@gmail.com"
-GMAIL_PASSWORD = "dzry siey cjko anwv"  # Replace with your actual App Password
+GMAIL_USER = "YOUR SENDER GMAIL ADDRESS"
+GMAIL_PASSWORD = "YOUR SENDER GMAIL ADDRESS PASSWORD"  # Replace with your actual App Password
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -50,7 +50,7 @@ DEFAULT_SETTINGS = {
     "threshold": 0.9,
     "gmail_user": GMAIL_USER,
     "gmail_password": GMAIL_PASSWORD,
-    "receiver_email": "blazingsyedali451@gmail.com"
+    "receiver_email": "YOUR RECEIVER GMAIL ADDRESS"
 }
 
 # Load settings from file or use defaults
@@ -526,7 +526,7 @@ class YOLODetector:
                                             print(f"Started timer for {name} on Camera {i + 1} at {current_time:.2f}")
                                         duration = current_time - detection_start_times[key]
                                         print(f"Object {name} on Camera {i + 1} detected for {duration:.2f} seconds")
-                                        if duration >= 4 and key not in email_sent:
+                                        if duration >= 2 and key not in email_sent:
                                             self.email_alert_background(
                                                 f"Object {name} Detected",
                                                 f"Object '{name}' has been detected for more than 4 seconds in Camera {i + 1}.",

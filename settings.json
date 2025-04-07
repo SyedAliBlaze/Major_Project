@@ -1,11 +1,11 @@
 {
-    "yolo_model": "C:/Users/blazi/OneDrive/Documents/sample/gui/MODEL/yolo11s.pt",
-    "sr_model": "c:\\Users\\blazi\\OneDrive\\Documents\\sample\\gui\\MODEL\\RealESRGAN_x4plus.pth",
+    "yolo_model": "MODEL/yolo11s.pt",
+    "sr_model": "MODEL\\RealESRGAN_x4plus.pth",
     "object_list": [
         "person"
     ],
     "threshold": 0.9,
-    "gmail_user": "projectblaze007@gmail.com",
-    "gmail_password": "dzry siey cjko anwv",
-    "receiver_email": "blazingsyedali451@gmail.com"
+    "gmail_user": "YOUR SENDER GMAIL ADDRESS",
+    "gmail_password": "YOUR SENDER GMAIL ADDRESS PASSWORD",
+    "receiver_email": "YOUR RECEIVER GMAIL ADDRESS"
 }
